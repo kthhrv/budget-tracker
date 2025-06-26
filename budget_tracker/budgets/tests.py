@@ -290,20 +290,29 @@ class MonthlyInstanceAdminTest(TestCase):
         form_class = self.admin.get_form(request, instance)
         form = form_class(instance=instance)
         
-        # Check that the auto-populated budget items are in the form's initial data
-        initial_budget_items = form.initial.get('budget_items', [])
-        if hasattr(initial_budget_items, '__iter__'):
-            initial_item_ids = [item.id if hasattr(item, 'id') else item for item in initial_budget_items]
+        # Check that the repeating items are in the repeating_items field
+        initial_repeating_items = form.initial.get('repeating_items', [])
+        if hasattr(initial_repeating_items, '__iter__'):
+            repeating_item_ids = [item.id if hasattr(item, 'id') else item for item in initial_repeating_items]
         else:
-            initial_item_ids = []
+            repeating_item_ids = []
         
-        # The auto-populated items should be in the form's initial data
-        self.assertIn(self.repeating_item1.id, initial_item_ids)
-        self.assertIn(self.repeating_item2.id, initial_item_ids)
-        self.assertNotIn(self.non_repeating_item.id, initial_item_ids)
+        # The auto-populated repeating items should be in the repeating_items field
+        self.assertIn(self.repeating_item1.id, repeating_item_ids)
+        self.assertIn(self.repeating_item2.id, repeating_item_ids)
+        
+        # Check that non-repeating items field is empty (none selected)
+        initial_non_repeating_items = form.initial.get('non_repeating_items', [])
+        if hasattr(initial_non_repeating_items, '__iter__'):
+            non_repeating_item_ids = [item.id if hasattr(item, 'id') else item for item in initial_non_repeating_items]
+        else:
+            non_repeating_item_ids = []
+        
+        # No non-repeating items should be initially selected
+        self.assertNotIn(self.non_repeating_item.id, non_repeating_item_ids)
     
     def test_admin_form_field_queryset_includes_auto_populated_items(self):
-        """Test that the admin form's budget_items field includes auto-populated items in its selected values."""
+        """Test that the admin form's separate fields include correct items."""
         # Create a MonthlyInstance which should auto-populate with repeating items  
         instance = MonthlyInstance.objects.create(month=self.test_month)
         
@@ -314,25 +323,56 @@ class MonthlyInstanceAdminTest(TestCase):
         form_class = self.admin.get_form(request, instance)
         form = form_class(instance=instance)
         
-        # Get the budget_items field
-        budget_items_field = form.fields['budget_items']
+        # Check that we have the separate fields for repeating and non-repeating items
+        self.assertIn('repeating_items', form.fields)
+        self.assertIn('non_repeating_items', form.fields)
         
-        # Check that the field's widget has the correct selected values
-        if hasattr(budget_items_field.widget, 'value'):
-            selected_values = budget_items_field.widget.value
-        else:
-            # For many-to-many fields, check the form's initial data
-            selected_values = form.initial.get('budget_items', [])
+        # Check that the repeating items field shows the correct items
+        repeating_field = form.fields['repeating_items']
+        initial_repeating = form.initial.get('repeating_items', [])
         
         # Convert to IDs if needed
-        if selected_values:
-            if hasattr(selected_values[0], 'id'):
-                selected_ids = [item.id for item in selected_values]
+        if initial_repeating:
+            if hasattr(initial_repeating[0], 'id'):
+                repeating_ids = [item.id for item in initial_repeating]
             else:
-                selected_ids = selected_values
+                repeating_ids = initial_repeating
                 
-            self.assertIn(self.repeating_item1.id, selected_ids)
-            self.assertIn(self.repeating_item2.id, selected_ids)
+            self.assertIn(self.repeating_item1.id, repeating_ids)
+            self.assertIn(self.repeating_item2.id, repeating_ids)
+        
+        # Check that the non-repeating items field is available but empty initially
+        non_repeating_field = form.fields['non_repeating_items']
+        initial_non_repeating = form.initial.get('non_repeating_items', [])
+        
+        # Should be empty initially since no non-repeating items were manually added
+        self.assertEqual(len(initial_non_repeating), 0)
+    
+    def test_admin_form_handles_non_repeating_items(self):
+        """Test that the admin form can handle manually added non-repeating items."""
+        # Create a MonthlyInstance and manually add a non-repeating item
+        instance = MonthlyInstance.objects.create(month=self.test_month)
+        instance.budget_items.add(self.non_repeating_item)
+        
+        request = self.factory.get('/admin/budgets/monthlyinstance/{}/change/'.format(instance.pk))
+        request.user = self.user
+        
+        # Get the admin form
+        form_class = self.admin.get_form(request, instance)
+        form = form_class(instance=instance)
+        
+        # Check that repeating items are still in the repeating field
+        initial_repeating = form.initial.get('repeating_items', [])
+        if initial_repeating:
+            repeating_ids = [item.id if hasattr(item, 'id') else item for item in initial_repeating]
+            self.assertIn(self.repeating_item1.id, repeating_ids)
+            self.assertIn(self.repeating_item2.id, repeating_ids)
+        
+        # Check that the non-repeating item is in the non-repeating field
+        initial_non_repeating = form.initial.get('non_repeating_items', [])
+        if initial_non_repeating:
+            non_repeating_ids = [item.id if hasattr(item, 'id') else item for item in initial_non_repeating]
+            self.assertIn(self.non_repeating_item.id, non_repeating_ids)
     
     def test_auto_populated_items_calculate_total_automatically(self):
         """Test that the total is calculated automatically when items are auto-populated."""

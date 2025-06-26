@@ -88,3 +88,34 @@ class MonthlyInstance(models.Model):
         self.total_amount = total
         self.save()
         return total
+    
+    def auto_populate_repeating_items(self):
+        """
+        Auto-populate this monthly instance with active repeating budget items.
+        
+        Adds budget items that:
+        - Have repeats=True
+        - Have startdate <= this month
+        - Have no end_date OR end_date >= this month (not expired)
+        """
+        # Get all repeating budget items that should be active for this month
+        active_repeating_items = BudgetItem.objects.filter(
+            repeats=True,
+            startdate__lte=self.month
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=self.month)
+        )
+        
+        # Add these items to this monthly instance
+        self.budget_items.set(active_repeating_items)
+    
+    def save(self, *args, **kwargs):
+        """
+        Override save to auto-populate repeating items for new instances.
+        """
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        
+        # Only auto-populate for new instances
+        if is_new:
+            self.auto_populate_repeating_items()

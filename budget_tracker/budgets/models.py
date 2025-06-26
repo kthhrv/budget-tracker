@@ -84,7 +84,7 @@ class MonthlyInstance(models.Model):
         """
         Calculate the total amount for all budget items in this month.
         """
-        total = sum(item.cost for item in self.budget_items.all())
+        total = sum((item.cost for item in self.budget_items.all()), Decimal('0.00'))
         self.total_amount = total
         self.save()
         return total
@@ -108,6 +108,9 @@ class MonthlyInstance(models.Model):
         
         # Add these items to this monthly instance
         self.budget_items.set(active_repeating_items)
+        
+        # Calculate the total amount for the auto-populated items
+        self.calculate_total()
     
     def save(self, *args, **kwargs):
         """

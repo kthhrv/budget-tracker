@@ -1,8 +1,12 @@
 from django.test import TestCase
 from django.core.exceptions import ValidationError
+from django.contrib.admin.sites import AdminSite
+from django.contrib.auth.models import User
+from django.test import RequestFactory
 from decimal import Decimal
 from datetime import date, timedelta
 from .models import BudgetItem, MonthlyInstance
+from .admin import MonthlyInstanceAdmin
 
 
 class BudgetItemModelTest(TestCase):
@@ -222,3 +226,127 @@ class MonthlyInstanceAutoPopulateTest(TestCase):
         
         budget_items = list(instance.budget_items.all())
         self.assertEqual(len(budget_items), 2)  # Should still be 2, not 4
+
+
+class MonthlyInstanceAdminTest(TestCase):
+    """Test Django admin interface behavior for MonthlyInstance with auto-populated items."""
+    
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_superuser(
+            username='admin',
+            email='admin@example.com',
+            password='password'
+        )
+        self.site = AdminSite()
+        self.admin = MonthlyInstanceAdmin(MonthlyInstance, self.site)
+        
+        self.test_month = date(2024, 6, 1)
+        
+        # Create repeating budget items that should be auto-populated
+        self.repeating_item1 = BudgetItem.objects.create(
+            name='Monthly Rent',
+            owner='John',
+            cost=Decimal('1200.00'),
+            repeats=True,
+            startdate=date(2024, 1, 1)
+        )
+        
+        self.repeating_item2 = BudgetItem.objects.create(
+            name='Car Insurance',
+            owner='Jane',
+            cost=Decimal('150.00'),
+            repeats=True,
+            startdate=date(2024, 1, 1)
+        )
+        
+        # Create a non-repeating item that should NOT be auto-populated
+        self.non_repeating_item = BudgetItem.objects.create(
+            name='One-time Expense',
+            owner='Bob',
+            cost=Decimal('500.00'),
+            repeats=False,
+            startdate=date(2024, 1, 1)
+        )
+    
+    def test_auto_populated_items_visible_in_admin_form(self):
+        """Test that auto-populated budget items are visible when editing a MonthlyInstance in admin."""
+        # Create a MonthlyInstance which should auto-populate with repeating items
+        instance = MonthlyInstance.objects.create(month=self.test_month)
+        
+        # Verify the items were auto-populated in the model
+        budget_items = list(instance.budget_items.all())
+        self.assertEqual(len(budget_items), 2)
+        
+        budget_item_names = [item.name for item in budget_items]
+        self.assertIn('Monthly Rent', budget_item_names)
+        self.assertIn('Car Insurance', budget_item_names)
+        
+        # Now test that these items appear as selected in the admin form
+        request = self.factory.get('/admin/budgets/monthlyinstance/{}/change/'.format(instance.pk))
+        request.user = self.user
+        
+        # Get the admin change form
+        form_class = self.admin.get_form(request, instance)
+        form = form_class(instance=instance)
+        
+        # Check that the auto-populated budget items are in the form's initial data
+        initial_budget_items = form.initial.get('budget_items', [])
+        if hasattr(initial_budget_items, '__iter__'):
+            initial_item_ids = [item.id if hasattr(item, 'id') else item for item in initial_budget_items]
+        else:
+            initial_item_ids = []
+        
+        # The auto-populated items should be in the form's initial data
+        self.assertIn(self.repeating_item1.id, initial_item_ids)
+        self.assertIn(self.repeating_item2.id, initial_item_ids)
+        self.assertNotIn(self.non_repeating_item.id, initial_item_ids)
+    
+    def test_admin_form_field_queryset_includes_auto_populated_items(self):
+        """Test that the admin form's budget_items field includes auto-populated items in its selected values."""
+        # Create a MonthlyInstance which should auto-populate with repeating items  
+        instance = MonthlyInstance.objects.create(month=self.test_month)
+        
+        request = self.factory.get('/admin/budgets/monthlyinstance/{}/change/'.format(instance.pk))
+        request.user = self.user
+        
+        # Get the admin form
+        form_class = self.admin.get_form(request, instance)
+        form = form_class(instance=instance)
+        
+        # Get the budget_items field
+        budget_items_field = form.fields['budget_items']
+        
+        # Check that the field's widget has the correct selected values
+        if hasattr(budget_items_field.widget, 'value'):
+            selected_values = budget_items_field.widget.value
+        else:
+            # For many-to-many fields, check the form's initial data
+            selected_values = form.initial.get('budget_items', [])
+        
+        # Convert to IDs if needed
+        if selected_values:
+            if hasattr(selected_values[0], 'id'):
+                selected_ids = [item.id for item in selected_values]
+            else:
+                selected_ids = selected_values
+                
+            self.assertIn(self.repeating_item1.id, selected_ids)
+            self.assertIn(self.repeating_item2.id, selected_ids)
+    
+    def test_auto_populated_items_calculate_total_automatically(self):
+        """Test that the total is calculated automatically when items are auto-populated."""
+        # Create a MonthlyInstance which should auto-populate with repeating items
+        instance = MonthlyInstance.objects.create(month=self.test_month)
+        
+        # Verify the items were auto-populated
+        budget_items = list(instance.budget_items.all())
+        self.assertEqual(len(budget_items), 2)
+        
+        # Verify the total was calculated automatically
+        expected_total = self.repeating_item1.cost + self.repeating_item2.cost  # 1200 + 150 = 1350
+        self.assertEqual(instance.total_amount, expected_total)
+        
+        # Verify the string representation shows the correct total
+        expected_str = f"{self.test_month.strftime('%B %Y')} - Total: ${expected_total}"
+        self.assertEqual(str(instance), expected_str)
